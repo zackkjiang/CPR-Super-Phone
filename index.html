@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>CPR ASSIST · Sensor Hub</title>
+  <link rel="manifest" href="manifest.json" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:      #0a0a0f;
+      --surface: #12121a;
+      --border:  #1e1e2e;
+      --red:     #ff3b3b;
+      --amber:   #ffb340;
+      --green:   #30d158;
+      --blue:    #0a84ff;
+      --text:    #e5e5f0;
+      --muted:   #5a5a7a;
+      --mono:    'IBM Plex Mono', monospace;
+      --sans:    'IBM Plex Sans', sans-serif;
+    }
+    html, body { height:100%; background:var(--bg); color:var(--text); font-family:var(--sans); overflow-x:hidden; -webkit-font-smoothing:antialiased; }
+
+    header { display:flex; align-items:center; justify-content:space-between; padding:16px 18px 12px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:10; }
+    .logo { font-family:var(--mono); font-size:11px; letter-spacing:0.2em; color:var(--red); }
+    .logo .sep { color:var(--muted); margin:0 6px; }
+    .ws-status { display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:10px; color:var(--muted); }
+    .ws-dot { width:7px; height:7px; border-radius:50%; background:var(--muted); transition:background 0.3s,box-shadow 0.3s; }
+    .ws-dot.connected { background:var(--green); box-shadow:0 0 8px var(--green); animation:blink 2s ease-in-out infinite; }
+    .ws-dot.error { background:var(--red); }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    main { padding:16px; display:flex; flex-direction:column; gap:14px; max-width:480px; margin:0 auto; }
+
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px; position:relative; overflow:hidden; }
+    .card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--accent,var(--border)); }
+    .section-label { font-family:var(--mono); font-size:9px; letter-spacing:0.2em; color:var(--muted); text-transform:uppercase; margin-bottom:8px; }
+
+    .badge { display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:9px; letter-spacing:0.12em; padding:3px 8px; border-radius:20px; background:var(--border); color:var(--muted); }
+    .badge.active { background:rgba(48,209,88,0.12); color:var(--green); border:1px solid rgba(48,209,88,0.3); }
+    .badge.error  { background:rgba(255,59,59,0.12); color:var(--red); border:1px solid rgba(255,59,59,0.3); }
+    .badge.warn   { background:rgba(255,179,64,0.12); color:var(--amber); border:1px solid rgba(255,179,64,0.3); }
+    .badge-dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+
+    /* GPS */
+    .gps-card { --accent:var(--blue); }
+    .gps-row { display:flex; align-items:center; justify-content:space-between; }
+    .gps-coords { font-family:var(--mono); font-size:12px; color:var(--blue); }
+    .gps-meta { font-family:var(--mono); font-size:10px; color:var(--muted); margin-top:3px; }
+
+    /* MODE SWITCHER */
+    .mode-switcher { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .mode-btn { padding:18px 12px; border-radius:10px; border:2px solid var(--border); background:var(--surface); color:var(--muted); font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0.12em; text-align:center; cursor:pointer; transition:all 0.2s; line-height:1.6; }
+    .mode-btn .mode-icon { font-size:28px; display:block; margin-bottom:6px; }
+    .mode-btn.active-cpr { border-color:var(--red); color:var(--red); background:rgba(255,59,59,0.08); box-shadow:0 0 20px rgba(255,59,59,0.15); }
+    .mode-btn.active-ppg { border-color:var(--amber); color:var(--amber); background:rgba(255,179,64,0.08); box-shadow:0 0 20px rgba(255,179,64,0.15); }
+    .mode-btn:active { transform:scale(0.97); }
+
+    /* ACCEL PANEL */
+    .accel-card { --accent:var(--red); display:none; }
+    .accel-card.visible { display:block; }
+    .axis-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:10px; }
+    .axis-block { text-align:center; }
+    .axis-label { font-family:var(--mono); font-size:9px; color:var(--muted); letter-spacing:0.15em; margin-bottom:2px; }
+    .axis-val { font-family:var(--mono); font-size:22px; font-weight:600; }
+    .axis-val.x { color:var(--red); }
+    .axis-val.y { color:#ff6b6b; }
+    .axis-val.z { color:#ff9999; }
+    .press-row { margin-top:8px; }
+    .press-label-row { display:flex; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--muted); margin-bottom:4px; }
+    .press-rate-val { color:var(--red); font-size:13px; font-weight:600; }
+    .bar-track { height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+    .bar-fill { height:100%; border-radius:3px; background:var(--red); width:0%; transition:width 0.15s,background 0.3s; }
+    .bar-fill.good { background:var(--green); }
+    .bar-fill.warn { background:var(--amber); }
+    .wave-wrap { margin-top:10px; border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#0d0d14; }
+    canvas.wave { display:block; width:100%; height:60px; }
+
+    /* PPG PANEL */
+    .ppg-card { --accent:var(--amber); display:none; }
+    .ppg-card.visible { display:block; }
+
+    /* Camera preview */
+    .cam-wrap { position:relative; width:100%; height:140px; border-radius:8px; overflow:hidden; background:#0d0d14; border:1px solid var(--border); margin-bottom:12px; }
+    #ppg-video { width:100%; height:100%; object-fit:cover; display:block; }
+    .cam-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; background:rgba(0,0,0,0.65); color:var(--text); font-family:var(--mono); font-size:11px; text-align:center; padding:12px; transition:opacity 0.3s; }
+    .cam-overlay.hidden { opacity:0; pointer-events:none; }
+
+    .ppg-metrics { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+    .ppg-metric { background:#0d0d14; border:1px solid var(--border); border-radius:8px; padding:12px; text-align:center; }
+    .ppg-metric-label { font-family:var(--mono); font-size:9px; color:var(--muted); letter-spacing:0.12em; margin-bottom:4px; }
+    .ppg-metric-val { font-family:var(--mono); font-size:36px; font-weight:600; color:var(--text); line-height:1; }
+    .ppg-metric-val.active { color:var(--amber); }
+    .ppg-metric-unit { font-family:var(--mono); font-size:9px; color:var(--muted); margin-top:3px; }
+
+    /* Signal bar */
+    .sig-bar-wrap { margin-bottom:10px; }
+    .sig-bar-header { display:flex; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--muted); margin-bottom:4px; }
+    .sig-pct { color:var(--text); }
+
+    /* WS CONFIG */
+    .ws-card { --accent:var(--blue); }
+    .ws-config { display:flex; gap:8px; align-items:center; }
+    .ws-input { flex:1; background:var(--border); border:1px solid var(--muted); border-radius:6px; padding:8px 10px; color:var(--text); font-family:var(--mono); font-size:11px; outline:none; }
+    .ws-input:focus { border-color:var(--blue); }
+    .ws-btn { padding:8px 14px; background:var(--blue); color:#fff; font-family:var(--mono); font-size:10px; border:none; border-radius:6px; cursor:pointer; letter-spacing:0.1em; white-space:nowrap; }
+
+    /* offscreen canvas hidden */
+    #ppg-offscreen { display:none; }
+
+    footer { text-align:center; padding:20px 16px; font-family:var(--mono); font-size:9px; color:var(--muted); letter-spacing:0.1em; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">CPR<span class="sep">·</span>ASSIST</div>
+  <div class="ws-status">
+    <div class="ws-dot" id="ws-dot"></div>
+    <span id="ws-label">DISCONNECTED</span>
+  </div>
+</header>
+
+<canvas id="ppg-offscreen" width="200" height="150"></canvas>
+
+<main>
+
+  <!-- GPS always on -->
+  <div class="card gps-card">
+    <div class="gps-row">
+      <div>
+        <div class="section-label" style="margin:0 0 4px">GPS · Always On</div>
+        <div class="gps-coords" id="gps-coords">Acquiring...</div>
+        <div class="gps-meta" id="gps-meta">—</div>
+      </div>
+      <div class="badge" id="gps-badge"><div class="badge-dot"></div>IDLE</div>
+    </div>
+  </div>
+
+  <!-- MODE SWITCHER -->
+  <div class="mode-switcher">
+    <button class="mode-btn" id="btn-cpr" onclick="setMode('cpr')">
+      <span class="mode-icon">🫀</span>
+      CPR MODE
+      <br><span style="font-size:9px;opacity:0.6;font-weight:400">ACCELEROMETER</span>
+    </button>
+    <button class="mode-btn" id="btn-ppg" onclick="setMode('ppg')">
+      <span class="mode-icon">💓</span>
+      PULSE MODE
+      <br><span style="font-size:9px;opacity:0.6;font-weight:400">PPG CAMERA</span>
+    </button>
+  </div>
+
+  <!-- ACCEL PANEL -->
+  <div class="card accel-card" id="accel-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-label" style="margin:0">Accelerometer · Live</div>
+      <div class="badge active"><div class="badge-dot"></div>LIVE</div>
+    </div>
+    <div class="axis-row">
+      <div class="axis-block"><div class="axis-label">X</div><div class="axis-val x" id="ax">—</div></div>
+      <div class="axis-block"><div class="axis-label">Y</div><div class="axis-val y" id="ay">—</div></div>
+      <div class="axis-block"><div class="axis-label">Z</div><div class="axis-val z" id="az">—</div></div>
+    </div>
+    <div class="press-row">
+      <div class="press-label-row">
+        <span>COMPRESSION RATE</span>
+        <span class="press-rate-val" id="press-rate">— /min</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" id="press-bar"></div></div>
+    </div>
+    <div class="wave-wrap"><canvas class="wave" id="accel-canvas" height="60"></canvas></div>
+  </div>
+
+  <!-- PPG PANEL -->
+  <div class="card ppg-card" id="ppg-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="section-label" style="margin:0">PPG Camera · Live</div>
+      <div class="badge" id="ppg-status-badge"><div class="badge-dot"></div>STARTING</div>
+    </div>
+
+    <!-- Camera preview with overlay -->
+    <div class="cam-wrap">
+      <video id="ppg-video" autoplay muted playsinline></video>
+      <div class="cam-overlay" id="cam-overlay">
+        <span style="font-size:20px">👆</span>
+        <span id="cam-overlay-text">Cover camera with fingertip</span>
+      </div>
+    </div>
+
+    <!-- BPM + Quality -->
+    <div class="ppg-metrics">
+      <div class="ppg-metric">
+        <div class="ppg-metric-label">HEART RATE</div>
+        <div class="ppg-metric-val" id="bpm-display">—</div>
+        <div class="ppg-metric-unit">BPM</div>
+      </div>
+      <div class="ppg-metric">
+        <div class="ppg-metric-label">SIGNAL</div>
+        <div class="ppg-metric-val" id="sig-grade">—</div>
+        <div class="ppg-metric-unit">QUALITY</div>
+      </div>
+    </div>
+
+    <!-- Signal strength bar -->
+    <div class="sig-bar-wrap">
+      <div class="sig-bar-header">
+        <span>SIGNAL STRENGTH</span>
+        <span class="sig-pct" id="sig-pct">0%</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" id="sig-bar"></div></div>
+    </div>
+
+    <!-- Waveform -->
+    <div class="wave-wrap"><canvas class="wave" id="ppg-canvas" height="60"></canvas></div>
+  </div>
+
+  <!-- WS CONFIG -->
+  <div class="card ws-card">
+    <div class="section-label">WebSocket Server</div>
+    <div class="ws-config">
+      <input class="ws-input" id="ws-url" type="text" value="ws://localhost:8765" />
+      <button class="ws-btn" onclick="toggleWS()">CONNECT</button>
+    </div>
+  </div>
+
+</main>
+<footer>HEALTHCARE HACK NYC · SENSOR HUB v2.0</footer>
+
+<script>
+// ── STATE ──────────────────────────────────────────────────────────────────
+let currentMode = null;
+let ws = null;
+
+// Accel
+let accelHandler = null;
+const accelBuf = new Array(120).fill(0);
+let accelCtx, accelCanvasEl;
+let pressTimestamps = [], lastPeakTime = 0;
+
+// PPG
+let ppgStream = null, ppgRafId = null;
+const PPG_BUF_SIZE = 300;
+let ppgRedBuf = [], ppgTsBuf = [], ppgBpmHistory = [];
+let ppgWaveData = new Array(150).fill(0.5);
+let ppgSignalQ = 0, ppgCurrentBpm = 0;
+let ppgCtx, ppgCanvasEl;
+const PPG_VIDEO    = document.getElementById('ppg-video');
+const PPG_OFF      = document.getElementById('ppg-offscreen');
+const ppgOffCtx    = PPG_OFF.getContext('2d');
+
+// GPS
+let gpsWatchId = null;
+let gpsData = null;
+
+// ── INIT ───────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  startGPS();
+  accelCanvasEl = document.getElementById('accel-canvas');
+  accelCtx      = accelCanvasEl.getContext('2d');
+  ppgCanvasEl   = document.getElementById('ppg-canvas');
+  ppgCtx        = ppgCanvasEl.getContext('2d');
+});
+
+// ── MODE SWITCH ────────────────────────────────────────────────────────────
+async function setMode(mode) {
+  if (currentMode === mode) {
+    stopMode(mode);
+    currentMode = null;
+    document.getElementById('btn-cpr').className = 'mode-btn';
+    document.getElementById('btn-ppg').className = 'mode-btn';
+    return;
+  }
+  if (currentMode) stopMode(currentMode);
+  currentMode = mode;
+
+  if (mode === 'cpr') {
+    document.getElementById('btn-cpr').className = 'mode-btn active-cpr';
+    document.getElementById('btn-ppg').className = 'mode-btn';
+    document.getElementById('accel-panel').classList.add('visible');
+    document.getElementById('ppg-panel').classList.remove('visible');
+    startAccel();
+  } else {
+    document.getElementById('btn-ppg').className = 'mode-btn active-ppg';
+    document.getElementById('btn-cpr').className = 'mode-btn';
+    document.getElementById('ppg-panel').classList.add('visible');
+    document.getElementById('accel-panel').classList.remove('visible');
+    await startPPG();
+  }
+}
+
+function stopMode(mode) {
+  if (mode === 'cpr') {
+    stopAccel();
+    document.getElementById('accel-panel').classList.remove('visible');
+  } else {
+    stopPPG();
+    document.getElementById('ppg-panel').classList.remove('visible');
+  }
+}
+
+// ── WEBSOCKET ──────────────────────────────────────────────────────────────
+function toggleWS() {
+  if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); ws = null; setWsDot(''); return; }
+  const url = document.getElementById('ws-url').value.trim();
+  try {
+    ws = new WebSocket(url);
+    ws.onopen  = () => setWsDot('connected');
+    ws.onclose = () => setWsDot('');
+    ws.onerror = () => setWsDot('error');
+  } catch(e) { setWsDot('error'); }
+}
+function setWsDot(s) {
+  document.getElementById('ws-dot').className = 'ws-dot ' + s;
+  document.getElementById('ws-label').textContent = s==='connected'?'LIVE':s==='error'?'ERROR':'DISCONNECTED';
+}
+function sendWS(type, payload) {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type, ts: Date.now(), ...payload }));
+}
+
+// ── GPS ────────────────────────────────────────────────────────────────────
+function startGPS() {
+  const badge = document.getElementById('gps-badge');
+  if (!navigator.geolocation) { badge.className='badge error'; badge.innerHTML='<div class="badge-dot"></div>N/A'; return; }
+  badge.innerHTML = '<div class="badge-dot"></div>ACQUIRING';
+  gpsWatchId = navigator.geolocation.watchPosition(pos => {
+    gpsData = { lat:+pos.coords.latitude.toFixed(6), lng:+pos.coords.longitude.toFixed(6), acc:+pos.coords.accuracy.toFixed(1) };
+    badge.className='badge active'; badge.innerHTML='<div class="badge-dot"></div>LOCK';
+    document.getElementById('gps-coords').textContent = `${gpsData.lat}, ${gpsData.lng}`;
+    document.getElementById('gps-meta').textContent = `±${gpsData.acc}m accuracy`;
+    sendWS('gps', gpsData);
+  }, () => {
+    badge.className='badge error'; badge.innerHTML='<div class="badge-dot"></div>DENIED';
+    document.getElementById('gps-coords').textContent = 'Location denied';
+  }, { enableHighAccuracy:true, maximumAge:5000 });
+}
+
+// ── ACCELEROMETER ──────────────────────────────────────────────────────────
+function startAccel() {
+  if (!window.DeviceMotionEvent) return;
+  accelCanvasEl.width = accelCanvasEl.offsetWidth * devicePixelRatio;
+
+  const listen = () => {
+    accelHandler = e => {
+      const acc = e.accelerationIncludingGravity || e.acceleration;
+      if (!acc) return;
+      const x=+(acc.x||0).toFixed(2), y=+(acc.y||0).toFixed(2), z=+(acc.z||0).toFixed(2);
+      const mag = Math.sqrt(x*x+y*y+z*z);
+      document.getElementById('ax').textContent = x.toFixed(1);
+      document.getElementById('ay').textContent = y.toFixed(1);
+      document.getElementById('az').textContent = z.toFixed(1);
+      accelBuf.push(mag); accelBuf.shift();
+      drawWave(accelCtx, accelCanvasEl, accelBuf, '#ff3b3b', 30);
+      const now = Date.now();
+      if (mag > 15 && (now - lastPeakTime) > 300) {
+        pressTimestamps.push(now); lastPeakTime = now;
+        if (pressTimestamps.length > 8) pressTimestamps.shift();
+        if (pressTimestamps.length >= 2) {
+          const span = pressTimestamps[pressTimestamps.length-1] - pressTimestamps[0];
+          const rate = Math.round((pressTimestamps.length-1)/span*60000);
+          updatePressBar(rate);
+          sendWS('accel', { x, y, z, mag:+mag.toFixed(2), pressRate:rate });
+          return;
+        }
+      }
+      if (now - lastPeakTime > 3000) updatePressBar(0);
+      sendWS('accel', { x, y, z, mag:+mag.toFixed(2), pressRate:0 });
+    };
+    window.addEventListener('devicemotion', accelHandler);
+  };
+
+  if (typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().then(r => r==='granted' && listen()).catch(()=>{});
+  } else { listen(); }
+}
+
+function stopAccel() {
+  if (accelHandler) { window.removeEventListener('devicemotion', accelHandler); accelHandler=null; }
+  document.getElementById('ax').textContent='—';
+  document.getElementById('ay').textContent='—';
+  document.getElementById('az').textContent='—';
+  updatePressBar(0); pressTimestamps=[];
+}
+
+function updatePressBar(rate) {
+  document.getElementById('press-rate').textContent = rate>0 ? `${rate} /min` : '— /min';
+  const pct = Math.min(rate/120*100, 100);
+  const bar = document.getElementById('press-bar');
+  bar.style.width = pct+'%';
+  bar.className = 'bar-fill'+(rate>=90&&rate<=120?' good':rate>0?' warn':'');
+}
+
+// ── PPG ────────────────────────────────────────────────────────────────────
+async function startPPG() {
+  ppgRedBuf=[]; ppgTsBuf=[]; ppgBpmHistory=[]; ppgSignalQ=0; ppgCurrentBpm=0;
+  ppgWaveData = new Array(150).fill(0.5);
+
+  const badge = document.getElementById('ppg-status-badge');
+  ppgCanvasEl.width = ppgCanvasEl.offsetWidth * devicePixelRatio;
+
+  try {
+    ppgStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:{ ideal:'environment' }, width:200, height:150, frameRate:{ ideal:30 } }
+    });
+    // Try to enable torch
+    const track = ppgStream.getVideoTracks()[0];
+    try { await track.applyConstraints({ advanced:[{ torch:true }] }); } catch(_) {}
+
+    PPG_VIDEO.srcObject = ppgStream;
+    await PPG_VIDEO.play();
+
+    badge.className='badge active'; badge.innerHTML='<div class="badge-dot"></div>LIVE';
+    ppgLoop();
+  } catch(e) {
+    badge.className='badge error'; badge.innerHTML='<div class="badge-dot"></div>DENIED';
+  }
+}
+
+function ppgLoop() {
+  if (currentMode !== 'ppg') return;
+
+  // Sample full frame (200x150) — same as reference impl
+  ppgOffCtx.drawImage(PPG_VIDEO, 0, 0, 200, 150);
+  const pixels = ppgOffCtx.getImageData(0, 0, 200, 150).data;
+  let r=0, g=0;
+  const n = pixels.length / 4;
+  for (let i=0; i<pixels.length; i+=4) { r+=pixels[i]; g+=pixels[i+1]; }
+  r/=n; g/=n;
+
+  // Finger detection: red channel dominant & sufficiently bright
+  const fingerOn = r > 90 && r > g * 1.3;
+
+  // Camera overlay
+  const overlay = document.getElementById('cam-overlay');
+  const overlayText = document.getElementById('cam-overlay-text');
+  if (fingerOn) {
+    overlay.classList.add('hidden');
+  } else {
+    overlay.classList.remove('hidden');
+    overlayText.textContent = ppgRedBuf.length < 10 ? 'Cover camera with fingertip' : 'Keep finger still over lens';
+  }
+
+  if (fingerOn) {
+    ppgRedBuf.push(r);
+    ppgTsBuf.push(performance.now());
+    if (ppgRedBuf.length > PPG_BUF_SIZE) { ppgRedBuf.shift(); ppgTsBuf.shift(); }
+    if (ppgRedBuf.length >= 60) analyzePPG();
+  }
+
+  // Waveform: normalize to [0,1]
+  const allVals = ppgRedBuf.length > 1 ? ppgRedBuf : [r];
+  const minV = Math.min(...allVals), maxV = Math.max(...allVals);
+  const norm = maxV > minV ? (r - minV)/(maxV - minV) : 0.5;
+  ppgWaveData.push(fingerOn ? norm : 0.5);
+  if (ppgWaveData.length > 150) ppgWaveData.shift();
+  drawPPGWave();
+
+  ppgRafId = requestAnimationFrame(ppgLoop);
+}
+
+function analyzePPG() {
+  const N = ppgRedBuf.length;
+  const mean = ppgRedBuf.reduce((a,b)=>a+b,0)/N;
+  const centered = ppgRedBuf.map(v=>v-mean);
+  const std = Math.sqrt(centered.reduce((a,b)=>a+b*b,0)/N);
+
+  // Signal quality based on std deviation
+  ppgSignalQ = Math.min(1, std / 8);
+  updatePPGQualityUI();
+
+  if (std < 1.2) return; // signal too weak
+
+  // Estimate FPS from timestamps
+  const dur = (ppgTsBuf[N-1] - ppgTsBuf[0]) / 1000;
+  const fps = (N-1) / dur;
+
+  // Autocorrelation with physiologically valid lag range (40-180 BPM)
+  const minLag = Math.max(1, Math.round(fps * 60/180));
+  const maxLag = Math.min(N-1, Math.round(fps * 60/40));
+
+  let bestLag=-1, bestCorr=-Infinity;
+  for (let lag=minLag; lag<=maxLag; lag++) {
+    let corr=0;
+    for (let i=0; i<N-lag; i++) corr += centered[i]*centered[i+lag];
+    if (corr > bestCorr) { bestCorr=corr; bestLag=lag; }
+  }
+
+  if (bestLag > 0) {
+    const bpm = Math.round((fps/bestLag)*60);
+    if (bpm >= 40 && bpm <= 180) {
+      ppgBpmHistory.push(bpm);
+      if (ppgBpmHistory.length > 8) ppgBpmHistory.shift();
+      // Median filter for stability
+      const sorted = [...ppgBpmHistory].sort((a,b)=>a-b);
+      ppgCurrentBpm = sorted[Math.floor(sorted.length/2)];
+      ppgSignalQ = Math.min(1, ppgSignalQ * 1.5);
+
+      document.getElementById('bpm-display').textContent = ppgCurrentBpm;
+      document.getElementById('bpm-display').className = 'ppg-metric-val active';
+      sendWS('ppg', { bpm:ppgCurrentBpm, redVal:Math.round(ppgRedBuf[ppgRedBuf.length-1]) });
+    }
+  }
+  updatePPGQualityUI();
+}
+
+function updatePPGQualityUI() {
+  const pct = Math.round(ppgSignalQ * 100);
+  const bar = document.getElementById('sig-bar');
+  bar.style.width = pct+'%';
+  bar.style.background = ppgSignalQ>0.6 ? '#30d158' : ppgSignalQ>0.3 ? '#ffb340' : '#ff3b3b';
+  document.getElementById('sig-pct').textContent = pct+'%';
+
+  const grade = ppgSignalQ>0.6 ? 'HIGH' : ppgSignalQ>0.3 ? 'MED' : 'LOW';
+  document.getElementById('sig-grade').textContent = grade;
+
+  const badge = document.getElementById('ppg-status-badge');
+  if (ppgSignalQ > 0.6) {
+    badge.className='badge active'; badge.innerHTML='<div class="badge-dot"></div>GOOD';
+  } else if (ppgSignalQ > 0.3) {
+    badge.className='badge warn'; badge.innerHTML='<div class="badge-dot"></div>WEAK';
+  }
+}
+
+function stopPPG() {
+  if (ppgRafId) { cancelAnimationFrame(ppgRafId); ppgRafId=null; }
+  if (ppgStream) {
+    const track = ppgStream.getVideoTracks()[0];
+    try { track.applyConstraints({ advanced:[{ torch:false }] }); } catch(_) {}
+    ppgStream.getTracks().forEach(t=>t.stop());
+    ppgStream=null;
+  }
+  document.getElementById('bpm-display').textContent='—';
+  document.getElementById('bpm-display').className='ppg-metric-val';
+  document.getElementById('sig-grade').textContent='—';
+  document.getElementById('sig-pct').textContent='0%';
+  document.getElementById('sig-bar').style.width='0%';
+  document.getElementById('cam-overlay').classList.remove('hidden');
+  document.getElementById('cam-overlay-text').textContent='Cover camera with fingertip';
+  ppgRedBuf=[]; ppgTsBuf=[]; ppgBpmHistory=[];
+}
+
+// ── WAVEFORMS ──────────────────────────────────────────────────────────────
+function drawWave(ctx, el, buf, color, maxVal) {
+  const dpr = devicePixelRatio || 1;
+  const w=el.width, h=el.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle=color; ctx.lineWidth=1.5*dpr;
+  ctx.shadowColor=color; ctx.shadowBlur=4;
+  ctx.beginPath();
+  const step=w/(buf.length-1);
+  buf.forEach((v,i)=>{
+    const norm = maxVal===1 ? v : Math.min(v/maxVal,1);
+    const y = h - norm*(h*0.85) - h*0.05;
+    i===0 ? ctx.moveTo(0,y) : ctx.lineTo(i*step,y);
+  });
+  ctx.stroke();
+}
+
+function drawPPGWave() {
+  if (!ppgCtx) return;
+  const dpr = devicePixelRatio || 1;
+  const w=ppgCanvasEl.width, h=ppgCanvasEl.height;
+  ppgCtx.clearRect(0,0,w,h);
+
+  // Grid lines
+  ppgCtx.strokeStyle='rgba(255,255,255,0.05)'; ppgCtx.lineWidth=0.5;
+  for (let i=1; i<4; i++) {
+    ppgCtx.beginPath(); ppgCtx.moveTo(0,(i/4)*h); ppgCtx.lineTo(w,(i/4)*h); ppgCtx.stroke();
+  }
+
+  const vals = ppgWaveData;
+  const minV=Math.min(...vals), maxV=Math.max(...vals);
+  const range = maxV-minV || 1;
+
+  ppgCtx.strokeStyle='#ffb340'; ppgCtx.lineWidth=1.5*dpr;
+  ppgCtx.shadowColor='#ffb340'; ppgCtx.shadowBlur=4;
+  ppgCtx.lineJoin='round';
+  ppgCtx.beginPath();
+  vals.forEach((v,i)=>{
+    const x=(i/(vals.length-1))*w;
+    const y = h - ((v-minV)/range)*(h*0.75) - h*0.12;
+    i===0 ? ppgCtx.moveTo(x,y) : ppgCtx.lineTo(x,y);
+  });
+  ppgCtx.stroke();
+}
+</script>
+</body>
+</html>

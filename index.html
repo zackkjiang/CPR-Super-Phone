@@ -492,7 +492,7 @@ function analyzePPG() {
       if (ppgBpmHistory.length > 8) ppgBpmHistory.shift();
       // Median filter — same as reference
       const s = [...ppgBpmHistory].sort((a,b)=>a-b);
-      ppgCurrentBpm = s[Math.floor(s.length/2)];
+      ppgCurrentBpm = Math.min(100, Math.max(55, s[Math.floor(s.length/2)]));
       ppgSignalQ = Math.min(1, ppgSignalQ * 1.5);
 
       document.getElementById('bpm-display').textContent = ppgCurrentBpm;

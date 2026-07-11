@@ -269,8 +269,8 @@
   <div class="card ws-card">
     <div class="section-label">WebSocket Server</div>
     <div class="ws-config">
-      <input class="ws-input" id="ws-url" type="text" value="ws://localhost:8765" />
-      <button class="ws-btn" onclick="toggleWS()">CONNECT</button>
+      <input class="ws-input" id="ws-url" type="text" value="wss://semestral-unworthy-rana.ngrok-free.dev/ws" />
+      <button class="ws-btn" id="ws-btn" onclick="toggleWS()">CONNECT</button>
     </div>
   </div>
 
@@ -308,7 +308,11 @@ let recognition = null;
 let voiceEnabled = false;
 let isSpeaking = false;
 let lastPpgAnnounceTime = 0;
-const PPG_ANNOUNCE_INTERVAL = 6000; // ms between proactive BPM announcements
+const PPG_ANNOUNCE_INTERVAL = 6000;
+
+// Rolling snapshot of latest sensor readings — attached to every speech message
+// so the backend's Claude prompt has full context regardless of which mode is active.
+let sensorSnapshot = { mode: null, pressRate: 0, mag: 0, bpm: 0, lat: null, lng: null };
 
 // ── INIT ───────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
@@ -317,6 +321,7 @@ window.addEventListener('load', () => {
   accelCtx      = accelCanvasEl.getContext('2d');
   ppgCanvasEl   = document.getElementById('ppg-canvas');
   ppgCtx        = ppgCanvasEl.getContext('2d');
+  connectWS(); // auto-connect on load — no manual button needed
 });
 
 // ── MODE SWITCH ────────────────────────────────────────────────────────────
@@ -324,12 +329,14 @@ async function setMode(mode) {
   if (currentMode === mode) {
     stopMode(mode);
     currentMode = null;
+    sensorSnapshot.mode = null;
     document.getElementById('btn-cpr').className = 'mode-btn';
     document.getElementById('btn-ppg').className = 'mode-btn';
     return;
   }
   if (currentMode) stopMode(currentMode);
   currentMode = mode;
+  sensorSnapshot.mode = mode;
 
   if (mode === 'cpr') {
     document.getElementById('btn-cpr').className = 'mode-btn active-cpr';
@@ -357,24 +364,50 @@ function stopMode(mode) {
 }
 
 // ── WEBSOCKET ──────────────────────────────────────────────────────────────
-function toggleWS() {
-  if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); ws = null; setWsDot(''); return; }
+let wsReconnectTimer = null;
+let wsManuallyDisconnected = false;
+
+function connectWS() {
   const url = document.getElementById('ws-url').value.trim();
+  if (!url) return;
   try {
     ws = new WebSocket(url);
-    ws.onopen  = () => setWsDot('connected');
-    ws.onclose = () => setWsDot('');
+    ws.onopen  = () => {
+      setWsDot('connected');
+      document.getElementById('ws-btn').textContent = 'DISCONNECT';
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+    };
+    ws.onclose = () => {
+      setWsDot('');
+      document.getElementById('ws-btn').textContent = 'CONNECT';
+      // Auto-reconnect unless the user explicitly disconnected
+      if (!wsManuallyDisconnected) {
+        wsReconnectTimer = setTimeout(connectWS, 3000);
+      }
+    };
     ws.onerror = () => setWsDot('error');
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
-        if (msg.type === 'ai_response' && msg.text) {
+        if (msg.type === 'ai_reply' && msg.text) {
           showAIReply(msg.text);
           speak(msg.text);
         }
       } catch(e) {}
     };
   } catch(e) { setWsDot('error'); }
+}
+
+function toggleWS() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    wsManuallyDisconnected = true;
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+    ws.close(); ws = null; setWsDot('');
+    document.getElementById('ws-btn').textContent = 'CONNECT';
+    return;
+  }
+  wsManuallyDisconnected = false;
+  connectWS();
 }
 function setWsDot(s) {
   document.getElementById('ws-dot').className = 'ws-dot ' + s;
@@ -392,6 +425,8 @@ function startGPS() {
   badge.innerHTML = '<div class="badge-dot"></div>ACQUIRING';
   gpsWatchId = navigator.geolocation.watchPosition(pos => {
     gpsData = { lat:+pos.coords.latitude.toFixed(6), lng:+pos.coords.longitude.toFixed(6), acc:+pos.coords.accuracy.toFixed(1) };
+    sensorSnapshot.lat = gpsData.lat;
+    sensorSnapshot.lng = gpsData.lng;
     badge.className='badge active'; badge.innerHTML='<div class="badge-dot"></div>LOCK';
     document.getElementById('gps-coords').textContent = `${gpsData.lat}, ${gpsData.lng}`;
     document.getElementById('gps-meta').textContent = `±${gpsData.acc}m accuracy`;
@@ -426,11 +461,14 @@ function startAccel() {
           const span = pressTimestamps[pressTimestamps.length-1] - pressTimestamps[0];
           const rate = Math.round((pressTimestamps.length-1)/span*60000);
           updatePressBar(rate);
+          sensorSnapshot.pressRate = rate;
+          sensorSnapshot.mag = +mag.toFixed(2);
           sendWS('accel', { x, y, z, mag:+mag.toFixed(2), pressRate:rate });
           return;
         }
       }
-      if (now - lastPeakTime > 3000) updatePressBar(0);
+      if (now - lastPeakTime > 3000) { updatePressBar(0); sensorSnapshot.pressRate = 0; }
+      sensorSnapshot.mag = +mag.toFixed(2);
       sendWS('accel', { x, y, z, mag:+mag.toFixed(2), pressRate:0 });
     };
     window.addEventListener('devicemotion', accelHandler);
@@ -557,6 +595,7 @@ function analyzePPG() {
 
       document.getElementById('bpm-display').textContent = ppgCurrentBpm;
       document.getElementById('bpm-display').className = 'ppg-metric-val active';
+      sensorSnapshot.bpm = ppgCurrentBpm;
       sendWS('ppg', { bpm:ppgCurrentBpm, redVal:Math.round(ppgRedBuf[ppgRedBuf.length-1]) });
       maybeAnnouncePpg(ppgCurrentBpm);
     }
@@ -619,17 +658,26 @@ function enableVoice() {
   recognition.lang = 'en-US';
 
   recognition.onresult = (e) => {
+    // Ignore anything picked up while the AI itself is talking (prevents self-feedback loop)
+    if (isSpeaking) return;
+
     const last = e.results[e.results.length - 1];
     if (!last.isFinal) return;
     const transcript = last[0].transcript.trim();
-    if (!transcript) return;
+
+    // Noise filter: ignore very short / low-confidence fragments
+    const words = transcript.split(/\s+/).filter(Boolean);
+    const confidence = last[0].confidence;
+    if (words.length < 2) return;
+    if (typeof confidence === 'number' && confidence < 0.35) return;
+
     document.getElementById('voice-heard').textContent = transcript;
     handleVoiceInput(transcript);
   };
 
   recognition.onend = () => {
-    // Auto-restart to stay continuous, unless we're mid-speech (TTS) — restart after speaking too
-    if (voiceEnabled) {
+    // Auto-restart to stay continuous — but never while TTS is playing (avoids feedback + race)
+    if (voiceEnabled && !isSpeaking) {
       try { recognition.start(); } catch(e) {}
     }
   };
@@ -651,6 +699,7 @@ function setVoiceBadge(state) {
   const badge = document.getElementById('voice-badge');
   if (state === 'listening') { badge.className = 'badge listening'; badge.innerHTML = '<div class="mic-pulse on"></div>LISTENING'; }
   else if (state === 'speaking') { badge.className = 'badge speaking'; badge.innerHTML = '<div class="badge-dot"></div>SPEAKING'; }
+  else if (state === 'thinking') { badge.className = 'badge warn'; badge.innerHTML = '<div class="badge-dot"></div>THINKING'; }
   else { badge.className = 'badge'; badge.innerHTML = '<div class="badge-dot"></div>MIC OFF'; }
 }
 
@@ -660,14 +709,21 @@ function showAIReply(text) {
 
 function speak(text) {
   if (!window.speechSynthesis) return;
+
+  // Stop recognition BEFORE speaking so the mic doesn't hear the AI's own voice
+  isSpeaking = true;
+  if (recognition) { try { recognition.stop(); } catch(e) {} }
+
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.rate = 1.05;
-  isSpeaking = true;
   setVoiceBadge('speaking');
   utter.onend = () => {
     isSpeaking = false;
-    if (voiceEnabled) setVoiceBadge('listening');
+    if (voiceEnabled) {
+      setVoiceBadge('listening');
+      try { recognition.start(); } catch(e) {}
+    }
   };
   window.speechSynthesis.speak(utter);
 }
@@ -675,47 +731,43 @@ function speak(text) {
 // Handle a finalized speech transcript — route to backend if connected, else local fallback
 function handleVoiceInput(transcript) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    sendWS('voice', { mode: currentMode, text: transcript });
-    return;
+    setVoiceBadge('thinking');
+    sendWS('speech', { text: transcript, sensors: { ...sensorSnapshot } });
+    return; // reply arrives async via ws.onmessage → type 'ai_reply'
   }
-  // ── LOCAL FALLBACK (no backend connected yet) ──
+  // ── LOCAL FALLBACK (backend not connected) ──
   const reply = localVoiceFallback(transcript, currentMode);
   if (reply) { showAIReply(reply); speak(reply); }
 }
 
-// Local rule-based simulation of the 3 mode-specific prompts.
-// Replace with real Claude responses once backend WebSocket is connected —
-// backend should send { type:'ai_response', text:'...' } and this UI will speak it automatically.
+// Local rule-based simulation of the 3 mode-specific prompts — used only when
+// the backend WebSocket isn't connected. Once connected, real Claude replies
+// (type:'ai_reply') take over automatically.
 function localVoiceFallback(transcript, mode) {
   const t = transcript.toLowerCase();
 
   if (mode === 'acc') {
-    // ACC MODE: passive — only responds to explicit questions about compression quality
     if (/press|compress|depth|rate|hard|force|good|enough|ok|okay/.test(t)) {
-      const rateEl = document.getElementById('press-rate').textContent;
-      const rate = parseInt(rateEl) || 0;
+      const rate = sensorSnapshot.pressRate || 0;
       if (rate === 0) return "I'm not detecting compressions. Start pressing firmly on the center of the chest.";
-      if (rate < 100) return `Rate is ${rate} per minute — that's too slow. Speed up to at least 100 per minute.`;
-      if (rate > 120) return `Rate is ${rate} per minute — that's too fast. Slow down slightly, aim for 100 to 120.`;
-      return `Rate is ${rate} per minute — that's in the correct range. Keep going.`;
+      if (rate < 100) return `Rate is ${rate} per minute — too slow. Speed up to at least 100 per minute.`;
+      if (rate > 120) return `Rate is ${rate} per minute — too fast. Slow down, aim for 100 to 120.`;
+      return `Rate is ${rate} per minute — correct range. Keep going.`;
     }
-    return null; // stay silent otherwise
+    return null;
   }
 
   if (mode === 'ppg') {
-    // PPG MODE: handled proactively in analyzePPG, but also answer direct questions
     if (/heart|pulse|bpm|rate/.test(t)) {
-      const bpmEl = document.getElementById('bpm-display').textContent;
-      if (bpmEl === '—') return "I don't have a heart rate reading yet. Keep the finger still over the camera.";
-      const bpm = parseInt(bpmEl);
-      if (bpm <= 55) return `Heart rate is ${bpm} beats per minute — that's low.`;
-      if (bpm >= 100) return `Heart rate is ${bpm} beats per minute — that's elevated.`;
+      const bpm = sensorSnapshot.bpm || 0;
+      if (bpm === 0) return "No heart rate reading yet. Keep the finger still over the camera.";
+      if (bpm <= 55) return `Heart rate is ${bpm} beats per minute — low.`;
+      if (bpm >= 100) return `Heart rate is ${bpm} beats per minute — elevated.`;
       return `Heart rate is ${bpm} beats per minute — normal.`;
     }
     return null;
   }
 
-  // IDLE MODE: general assistant
   return "I'm here. Select CPR mode or Pulse mode, or tell me what's happening.";
 }
 
@@ -727,8 +779,8 @@ function maybeAnnouncePpg(bpm) {
   lastPpgAnnounceTime = now;
 
   if (ws && ws.readyState === WebSocket.OPEN) {
-    sendWS('voice', { mode:'ppg', text:'[proactive_bpm_update]', bpm });
-    return; // backend decides what to say
+    sendWS('speech', { text: '[proactive_bpm_update]', sensors: { ...sensorSnapshot } });
+    return;
   }
   let msg;
   if (bpm <= 55) msg = `Heart rate ${bpm}, low.`;

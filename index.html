@@ -452,6 +452,11 @@ function ppgLoop() {
     ppgTsBuf.push(performance.now());
     if (ppgRedBuf.length > PPG_BUF_SIZE) { ppgRedBuf.shift(); ppgTsBuf.shift(); }
     if (ppgRedBuf.length >= 60) analyzePPG();
+  } else {
+    // Finger left — reset to avoid stale history polluting next reading
+    ppgRedBuf = []; ppgTsBuf = []; ppgBpmHistory = []; ppgCurrentBpm = 0;
+    document.getElementById('bpm-display').textContent = '—';
+    document.getElementById('bpm-display').className = 'ppg-metric-val';
   }
 
   // Waveform: normalize to [0,1]

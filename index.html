@@ -409,6 +409,7 @@ async function startPPG() {
     ppgStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode:{ ideal:'environment' }, width:200, height:150, frameRate:{ ideal:30 } }
     });
+    PPG_OFF.width = 200; PPG_OFF.height = 150;
     // Try to enable torch
     const track = ppgStream.getVideoTracks()[0];
     try { await track.applyConstraints({ advanced:[{ torch:true }] }); } catch(_) {}
@@ -426,44 +427,35 @@ async function startPPG() {
 function ppgLoop() {
   if (currentMode !== 'ppg') return;
 
-  // Sample full frame (200x150) — same as reference impl
+  // ── EXACT LOGIC FROM SOLO-PPG REFERENCE ──
   ppgOffCtx.drawImage(PPG_VIDEO, 0, 0, 200, 150);
-  const pixels = ppgOffCtx.getImageData(0, 0, 200, 150).data;
+  const d = ppgOffCtx.getImageData(0, 0, 200, 150).data;
   let r=0, g=0;
-  const n = pixels.length / 4;
-  for (let i=0; i<pixels.length; i+=4) { r+=pixels[i]; g+=pixels[i+1]; }
+  const n = d.length / 4;
+  for (let i=0; i<d.length; i+=4) { r+=d[i]; g+=d[i+1]; }
   r/=n; g/=n;
 
-  // Finger detection: red channel dominant & sufficiently bright
   const fingerOn = r > 90 && r > g * 1.3;
 
-  // Camera overlay
   const overlay = document.getElementById('cam-overlay');
   const overlayText = document.getElementById('cam-overlay-text');
-  if (fingerOn) {
-    overlay.classList.add('hidden');
-  } else {
-    overlay.classList.remove('hidden');
-    overlayText.textContent = ppgRedBuf.length < 10 ? 'Cover camera with fingertip' : 'Keep finger still over lens';
-  }
+  overlay.style.opacity = fingerOn ? '0' : '0.85';
+  overlay.style.pointerEvents = fingerOn ? 'none' : '';
+  overlayText.textContent = fingerOn ? 'Detecting...' : 'Cover camera completely';
 
   if (fingerOn) {
     ppgRedBuf.push(r);
     ppgTsBuf.push(performance.now());
     if (ppgRedBuf.length > PPG_BUF_SIZE) { ppgRedBuf.shift(); ppgTsBuf.shift(); }
     if (ppgRedBuf.length >= 60) analyzePPG();
-  } else {
-    // Finger left — reset to avoid stale history polluting next reading
-    ppgRedBuf = []; ppgTsBuf = []; ppgBpmHistory = []; ppgCurrentBpm = 0;
-    document.getElementById('bpm-display').textContent = '—';
-    document.getElementById('bpm-display').className = 'ppg-metric-val';
   }
 
-  // Waveform: normalize to [0,1]
-  const allVals = ppgRedBuf.length > 1 ? ppgRedBuf : [r];
-  const minV = Math.min(...allVals), maxV = Math.max(...allVals);
+  // Waveform — normalize against rolling min/max (same as reference)
+  const vals = ppgRedBuf.map(p=>p);
+  const minV = vals.length ? Math.min(...vals) : 0;
+  const maxV = vals.length ? Math.max(...vals) : 255;
   const norm = maxV > minV ? (r - minV)/(maxV - minV) : 0.5;
-  ppgWaveData.push(fingerOn ? norm : 0.5);
+  ppgWaveData.push(norm);
   if (ppgWaveData.length > 150) ppgWaveData.shift();
   drawPPGWave();
 
@@ -471,29 +463,25 @@ function ppgLoop() {
 }
 
 function analyzePPG() {
+  // ── EXACT LOGIC FROM SOLO-PPG REFERENCE ──
   const N = ppgRedBuf.length;
   const mean = ppgRedBuf.reduce((a,b)=>a+b,0)/N;
-  const centered = ppgRedBuf.map(v=>v-mean);
-  const std = Math.sqrt(centered.reduce((a,b)=>a+b*b,0)/N);
+  const c = ppgRedBuf.map(v=>v-mean);
+  const std = Math.sqrt(c.reduce((a,b)=>a+b*b,0)/N);
 
-  // Signal quality based on std deviation
-  ppgSignalQ = Math.min(1, std / 8);
-  updatePPGQualityUI();
+  ppgSignalQ = Math.min(1, std/8);
 
-  if (std < 1.2) return; // signal too weak
+  if (std < 1.2) { updatePPGQualityUI(); return; }
 
-  // Estimate FPS from timestamps
   const dur = (ppgTsBuf[N-1] - ppgTsBuf[0]) / 1000;
   const fps = (N-1) / dur;
-
-  // Autocorrelation with physiologically valid lag range (40-180 BPM)
-  const minLag = Math.max(1, Math.round(fps * 60/180));
-  const maxLag = Math.min(N-1, Math.round(fps * 60/40));
+  const minLag = Math.max(1, Math.round(fps*60/180));
+  const maxLag = Math.min(N-1, Math.round(fps*60/40));
 
   let bestLag=-1, bestCorr=-Infinity;
   for (let lag=minLag; lag<=maxLag; lag++) {
     let corr=0;
-    for (let i=0; i<N-lag; i++) corr += centered[i]*centered[i+lag];
+    for (let i=0; i<N-lag; i++) corr += c[i]*c[i+lag];
     if (corr > bestCorr) { bestCorr=corr; bestLag=lag; }
   }
 
@@ -502,9 +490,9 @@ function analyzePPG() {
     if (bpm >= 40 && bpm <= 180) {
       ppgBpmHistory.push(bpm);
       if (ppgBpmHistory.length > 8) ppgBpmHistory.shift();
-      // Median filter for stability
-      const sorted = [...ppgBpmHistory].sort((a,b)=>a-b);
-      ppgCurrentBpm = sorted[Math.floor(sorted.length/2)];
+      // Median filter — same as reference
+      const s = [...ppgBpmHistory].sort((a,b)=>a-b);
+      ppgCurrentBpm = s[Math.floor(s.length/2)];
       ppgSignalQ = Math.min(1, ppgSignalQ * 1.5);
 
       document.getElementById('bpm-display').textContent = ppgCurrentBpm;
